@@ -1,4 +1,4 @@
-sshkey_dev_preview_int = "test-key"
+sshkey_dev_preview_int = "dev-preview-int"
 sshkey_dev_preview_stg = "test-key"
 sshkey_dev_preview_prod = "test-key"
 
@@ -6,36 +6,65 @@ last_action_day = 0
 year=getCurrentYear()
 
 // TODO: as these fields mature and stop changing, change into be build parameters so that a simple script can trigger a build
-def dates = input(
+config = input(
         message: 'Enter desired dates for cluster deployments (MM/DD/YYYYY)?\nDates are inclusive. Use 00/00/0000 if this step is not relevant to this run.',
         parameters: [
-                [$class: 'hudson.model.StringParameterDefinition', defaultValue: '', description: 'Name of this spring', name: 'sprint_name'],
+                [$class: 'hudson.model.StringParameterDefinition', defaultValue: '', description: 'Name of this sprint', name: 'sprint_name'],
                 [$class: 'hudson.model.StringParameterDefinition', defaultValue: "00/00/${year}", description: 'Date for the teardown and recreate dev-preview-int (first Friday of the sprint)', name: 'int_recreate'],
                 [$class: 'hudson.model.StringParameterDefinition', defaultValue: "00/00/${year}", description: 'Date of first upgrade for dev-preview-int (usually second Monday of the sprint)', name: 'int_upgrades_start'],
                 [$class: 'hudson.model.StringParameterDefinition', defaultValue: "00/00/${year}", description: 'Date of last upgrade for dev-preview-int (usually third Monday of the sprint)', name: 'int_upgrades_stop'],
                 [$class: 'hudson.model.StringParameterDefinition', defaultValue: "00/00/${year}", description: 'Date of first upgrade for dev-preview-stg (usually third Tuesday of the sprint)', name: 'stg_upgrades_start'],
                 [$class: 'hudson.model.StringParameterDefinition', defaultValue: "00/00/${year}", description: 'Date of last upgrade for dev-preview-stg (usually third Friday of the sprint)', name: 'stg_upgrades_stop'],
                 [$class: 'hudson.model.StringParameterDefinition', defaultValue: "00/00/${year}", description: 'Date of upgrade for dev-preview-prod (usually first Monday of \'next\' sprint); This process will not be performed without user input.', name: 'prod_upgrade'],
+                [$class: 'hudson.model.StringParameterDefinition', defaultValue: 'aos-devel@redhat.com, aos-qe@redhat.com', description: 'Success Mailing List', name: 'MAIL_LIST_SUCCESS'],
+                [$class: 'hudson.model.StringParameterDefinition', defaultValue: 'jupierce@redhat.com,tdawson@redhat.com,smunilla@redhat.com,mwoodson@redhat.com,chmurphy@redhat.com', description: 'Failure Mailing List', name: 'MAIL_LIST_FAILURE'],
         ]
 )
 
-echo "Launching sprint ${dates.sprint_name}"
-echo "Dates: ${dates}"
+echo "Launching sprint ${config.sprint_name}"
+echo "Configuration: ${config}"
 
 // Make sure dates are valid
-splitDate(dates.int_recreate)
-splitDate(dates.int_upgrades_start)
-splitDate(dates.int_upgrades_stop)
-splitDate(dates.stg_upgrades_start)
-splitDate(dates.stg_upgrades_stop)
-splitDate(dates.prod_upgrade)
+splitDate(config.int_recreate)
+splitDate(config.int_upgrades_start)
+splitDate(config.int_upgrades_stop)
+splitDate(config.stg_upgrades_start)
+splitDate(config.stg_upgrades_stop)
+splitDate(config.prod_upgrade)
 
 
 while ( true ) {
+
+    echo "  Waiting 30 minutes before next check..."
+
+    def force = false
+    try {
+        timeout( time: 30, unit: 'MINUTES' ) {
+            input message: 'Next assessment will occur in 30 minutes. Forcing action will ignore the disruption window and perform deployment checks immediately.', ok: 'Force Action'
+            force = true
+            last_action_day = 0
+        }
+    } catch (err) {
+        def user = err.getCauses()[0].getUser()
+        if('SYSTEM' == user.toString()) { // SYSTEM means timeout.
+            didTimeout = true
+        } else {
+            throw err
+        }
+    }
+
     def todayFields = getCurrentDateFields()
 
+    if ( force ) {
+        echo "    User has requested immediate action. Ignoring disruption window."
+    } else if ( todayFields[3] != 16 ) {
+        echo "    It is not currently 16:00h. No deployments will be initiated."
+        continue
+    }
+
+
     phase = "dev-preview-int/create"
-    if ( isToday( phase, todayFields, dates.int_recreate ) ) {
+    if ( isToday( phase, todayFields, config.int_recreate ) ) {
 
         def skip_build = false
         while ( true ) {
@@ -62,7 +91,7 @@ while ( true ) {
                 }
 
                 last_action_day = getDayOfYear()
-                status_notify("dev-preview-int has been recreated", "" ) // TODO: URL for dev-preview environment?
+                status_notify("dev-preview-int has been recreated", "Installed: https://console.dev-preview-int.openshift.com" )
                 break
             } catch ( e ) {
                 error_notify("${phase}", "${e}" )
@@ -74,7 +103,7 @@ while ( true ) {
 
 
     phase = "dev-preview-int/upgrades"
-    if ( isTodayBetween( phase, todayFields, dates.int_upgrades_start, dates.int_upgrades_stop ) ) {
+    if ( isTodayBetween( phase, todayFields, config.int_upgrades_start, config.int_upgrades_stop ) ) {
 
         def skip_build = false
         while ( true ) {
@@ -98,7 +127,7 @@ while ( true ) {
                 }
 
                 last_action_day = getDayOfYear()
-                status_notify("dev-preview-int has been upgraded", "" ) // TODO: URL for dev-preview environment?
+                status_notify("dev-preview-int has been upgraded", "Upgraded: https://console.dev-preview-int.openshift.com" )
                 break
             } catch ( e ) {
                 error_notify("${phase}", "${e}" )
@@ -112,7 +141,7 @@ while ( true ) {
 
 
     phase = "dev-preview-stg/upgrades"
-    if ( isTodayBetween( phase, todayFields, dates.stg_upgrades_start, dates.stg_upgrades_stop ) ) {
+    if ( isTodayBetween( phase, todayFields, config.stg_upgrades_start, config.stg_upgrades_stop ) ) {
 
         def skip_build = false
         while ( true ) {
@@ -136,7 +165,7 @@ while ( true ) {
                 }
 
                 last_action_day = getDayOfYear()
-                status_notify("dev-preview-stg has been upgraded", "" ) // TODO: URL for dev-preview environment?
+                status_notify("dev-preview-stg has been upgraded", "Upgraded: https://console.dev-preview-stg.openshift.com" )
                 break
             } catch ( e ) {
                 error_notify("${phase}", "${e}" )
@@ -149,7 +178,7 @@ while ( true ) {
 
 
     phase = "dev-preview-prod/upgrade (PRODUCTION)"
-    if ( isTodayOrBeyond( phase, todayFields, dates.prod_upgrade ) ) {
+    if ( isTodayOrBeyond( phase, todayFields, config.prod_upgrade ) ) {
 
         input "Continue only if you are ready to perform an upgrade on dev-preview-prod. The latest RPMs will be used (no new build will be performed)."
 
@@ -164,7 +193,7 @@ while ( true ) {
                     //TODO: runTowerOperation( sshkey_dev_preview_prod, 'verify' )
                 }
 
-                status_notify("dev-preview-prod has been upgraded", "" ) // TODO: URL for dev-preview environment?
+                status_notify("dev-preview-prod has been upgraded", "Upgraded: https://console.preview.openshift.com" )
                 break
             } catch ( e ) {
                 error_notify("${phase}", "${e}" )
@@ -177,8 +206,6 @@ while ( true ) {
     }
 
 
-    echo "  Checking for new action to perform in 30 minutes..."
-    sleep( time: 30, unit: 'MINUTES' )
 }
 
 
@@ -283,9 +310,10 @@ def runTowerOperation( sshKeyId, operation ) {
 
 def runOSEBuild() {
     try {
-        node() {
-            echo "Troy's pipeline goes here"
-        }
+        build job: '../aos-cd-builds/build%2Fose',
+            parameters: [   [$class: 'StringParameterValue', name: 'OSE_MAJOR', value: '3'],
+                            [$class: 'StringParameterValue', name: 'OSE_MINOR', value: '5'],
+                        ]
     } catch ( err ) {
         error "Error running openshift/ose build: ${err}"
     }
@@ -297,30 +325,24 @@ def getDayOfYear() {
 
 def status_notify(subject,msg) {
     echo "\n\n\nStaus: ${subject} ; Sending email:\n ${msg}\n\n\n"
-
-    // TODO: re-enable
-    /*
     mail(
-            to: "jpierce@redhat.com",
+            to: "${config.MAIL_LIST_SUCCESS}",
             replyTo: 'jpierce@redhat.com',
-            subject: "[aos-devel] [sprint-${dates.sprint_name}] ${subject}",
+            subject: "[aos-devel] [sprint-${config.sprint_name}] ${subject}",
             body: """\
 ${msg}
 
 Jenkins job: ${env.BUILD_URL}
 """);
-*/
 }
 
 def error_notify(subject,msg) {
     echo "\n\n\nError: ${subject} ; Sending email:\n ${msg}\n\n\n"
 
-    // TODO: re-enable
-    /*
     mail(
-            to: "${mailing_list}",
+            to: "${config.MAIL_LIST_FAILURE}",
             replyTo: 'jpierce@redhat.com',
-            subject: "FAILURE [sprint-${dates.sprint_name}] ${subject}",
+            subject: "FAILURE [sprint-${config.sprint_name}] ${subject}",
             body: """\
 ${msg}
 
@@ -330,5 +352,4 @@ Job console: ${env.BUILD_URL}/console
 
 Job input: ${env.BUILD_URL}/input
 """);
-*/
 }
